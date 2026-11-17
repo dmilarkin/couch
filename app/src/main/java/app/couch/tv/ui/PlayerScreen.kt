@@ -82,6 +82,7 @@ import app.couch.tv.data.SubResult
 import app.couch.tv.data.TitleParser
 import app.couch.tv.remote.NowPlaying
 import app.couch.tv.remote.RemoteCommand
+import app.couch.tv.remote.SubTrack
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -94,6 +95,10 @@ private data class TrackRef(val group: Tracks.Group, val index: Int) {
 }
 
 private val SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 1.75f, 2f)
+
+/** Subtitle tracks the TV can actually show, in a stable order shared with the phone remote. */
+private fun textRefs(t: Tracks): List<TrackRef> =
+    t.groups.filter { it.type == C.TRACK_TYPE_TEXT }.flatMap { g -> (0 until g.length).filter { g.isTrackSupported(it) }.map { TrackRef(g, it) } }
 
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
@@ -391,6 +396,8 @@ fun PlayerScreen(app: CouchApp, nav: Nav, initial: PlayRequest) {
             position = player.currentPosition
             if (player.duration > 0) duration = player.duration
             val r = req
+            val texts = textRefs(tracks)
+            val subsOff = player.trackSelectionParameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
             app.nowPlaying.value = NowPlaying(
                 title = r.title,
                 subtitle = r.subtitle,
@@ -401,6 +408,7 @@ fun PlayerScreen(app: CouchApp, nav: Nav, initial: PlayRequest) {
                 playing = player.isPlaying,
                 speed = player.playbackParameters.speed,
                 hasNext = r.queue.isNotEmpty(),
+                subtitles = texts.mapIndexed { i, t -> SubTrack(i, textLabel(t.format, i), !subsOff && t.selected) },
             )
             val now = System.currentTimeMillis()
             if (r.kind != "live" && player.isPlaying && now - lastSave > 10_000) {
@@ -489,8 +497,23 @@ fun PlayerScreen(app: CouchApp, nav: Nav, initial: PlayRequest) {
                 "zapUp" -> zap(-1)
                 "zapDown" -> zap(1)
                 "stop" -> nav.pop()
-                "subsOff" -> player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
+                "subsOff" -> {
+                    player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build()
+                    toast = "Subtitles off"
+                }
+                "subsOn" -> {
+                    // value = track number from the phone, or -1 to pick the best match for the subtitle language.
+                    val texts = textRefs(tracks)
+                    val lang = app.prefs.config.value.subLang.substringBefore('-')
+                    val pick = texts.getOrNull(c.value.toInt())
+                        ?: texts.firstOrNull { it.format.language?.startsWith(lang) == true }
+                        ?: texts.firstOrNull()
+                    val b = player.trackSelectionParameters.buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+                    if (pick != null) b.setOverrideForType(TrackSelectionOverride(pick.group.mediaTrackGroup, pick.index))
+                    player.trackSelectionParameters = b.build()
+                    toast = if (pick != null) "Subtitles: ${textLabel(pick.format, texts.indexOf(pick))}" else "This stream has no subtitles. Try Find online."
+                }
                 "subsSearch" -> {
                     showControls()
                     panel = Panel.SubsOnline

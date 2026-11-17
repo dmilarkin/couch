@@ -116,6 +116,19 @@ class Xtream(private val http: OkHttpClient, val creds: Creds) {
         return resp
     }
 
+    /** Saves a response straight to a file as fast as the network allows. Throws if the connection drops. */
+    fun downloadTo(file: java.io.File, action: String, extra: Map<String, String> = emptyMap()) {
+        val part = java.io.File(file.path + ".part")
+        open(action, extra).use { resp ->
+            val body = resp.body ?: throw XtreamException("Empty answer from the server")
+            body.byteStream().use { input ->
+                part.outputStream().use { out -> input.copyTo(out, 64 * 1024) }
+            }
+        }
+        file.delete()
+        if (!part.renameTo(file)) throw java.io.IOException("Couldn't save the download")
+    }
+
     fun rawJson(action: String?, extra: Map<String, String> = emptyMap()): String =
         open(action, extra).use { it.body?.string() ?: "" }
 

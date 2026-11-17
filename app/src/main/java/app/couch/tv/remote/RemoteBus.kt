@@ -20,7 +20,11 @@ data class NowPlaying(
     val playing: Boolean,
     val speed: Float,
     val hasNext: Boolean,
+    val subtitles: List<SubTrack> = emptyList(),
 )
+
+/** One subtitle track the TV can show, as listed on the phone remote. */
+data class SubTrack(val index: Int, val label: String, val selected: Boolean)
 
 /** Hands commands from the phone (web server thread) to the UI. */
 class RemoteBus {

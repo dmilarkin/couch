@@ -76,6 +76,8 @@ fun SettingsScreen(app: CouchApp, nav: Nav) {
                 val last = app.prefs.lastSync
                 val detail = if (sync.running) {
                     "Updating now: ${sync.stage}"
+                } else if (sync.warning != null) {
+                    sync.warning
                 } else {
                     "%,d movies · %,d series · %,d channels".format(counts.first, counts.second, counts.third) +
                         if (last > 0) " · updated ${DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(last))}" else ""
@@ -91,6 +93,16 @@ fun SettingsScreen(app: CouchApp, nav: Nav) {
             item {
                 SettingRow("Preferred language", "${cfg.prefLang}. Picked first when a movie has several versions, and gets audio priority.") {
                     picker = SettingsPicker.PrefLang
+                }
+            }
+            item { Section("Phone remote") }
+            item {
+                ToggleRow(
+                    "Phones need the QR code",
+                    if (cfg.requirePairing) "On: only phones that scanned the code can control the TV" else "Off: any phone on your Wi-Fi can open the address",
+                    cfg.requirePairing,
+                ) {
+                    app.prefs.update { it.copy(requirePairing = !it.requirePairing) }
                 }
             }
             item { Section("Playback") }
@@ -162,14 +174,18 @@ fun SettingsScreen(app: CouchApp, nav: Nav) {
         Column(Modifier.width(300.dp).padding(top = 10.dp)) {
             Text("Phone remote", fontSize = 20.sp, fontWeight = FontWeight.Bold)
             Text(
-                "Scan with your iPhone camera to browse, search, pick what to watch and control playback. Same Wi-Fi as the TV.",
+                if (cfg.requirePairing) {
+                    "Scan with your phone's camera to browse, search, pick what to watch and control playback. Only phones that scan this code can connect."
+                } else {
+                    "Scan with your phone's camera, or type the address below into any phone's browser on the same Wi-Fi."
+                },
                 fontSize = 13.sp,
                 color = Muted,
                 lineHeight = 19.sp,
                 modifier = Modifier.padding(top = 6.dp, bottom = 16.dp),
             )
-            QrImage(url, 240.dp)
-            Text(url?.substringBefore("?") ?: "", fontSize = 12.sp, color = Faint, modifier = Modifier.padding(top = 10.dp))
+            QrImage(url, 220.dp)
+            Text(url?.substringBefore("?") ?: "", fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 12.dp))
             Spacer(Modifier.height(8.dp))
             Text("Tip: in Safari, Share > Add to Home Screen makes it feel like an app.", fontSize = 12.sp, color = Faint)
         }

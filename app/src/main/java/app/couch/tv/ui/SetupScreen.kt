@@ -68,14 +68,14 @@ fun SetupScreen(app: CouchApp) {
             Text("Let's connect your IPTV service.", fontSize = 24.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(18.dp))
             Text(
-                "Point your iPhone camera at the code and tap the link. Type your login on the phone, which beats typing with a remote. " +
-                    "Your phone and this TV need to be on the same Wi-Fi.",
+                "Point your phone's camera at the code and tap the link, or type the address below into its browser. " +
+                    "Type your login on the phone, which beats typing with a remote. Your phone and this TV need to be on the same Wi-Fi.",
                 fontSize = 16.sp,
                 color = Muted,
                 lineHeight = 24.sp,
             )
             Spacer(Modifier.height(14.dp))
-            Text(url?.substringBefore("?") ?: "Waiting for a network connection…", fontSize = 15.sp, color = Faint)
+            Text(url?.substringBefore("?") ?: "Waiting for a network connection…", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(28.dp))
             ActionButton("Type it on the TV instead", Modifier.focusRequester(btn)) { manual = true }
         }

@@ -33,7 +33,7 @@ class RemoteServer(private val app: CouchApp, port: Int) : NanoHTTPD(port) {
         if (!uri.startsWith("/api/")) return page()
 
         val token = s.headers["x-couch-token"] ?: s.parameters["t"]?.firstOrNull()
-        if (token != app.prefs.remoteToken) {
+        if (app.prefs.config.value.requirePairing && token != app.prefs.remoteToken) {
             return json(JSONObject().put("error", "This phone isn't paired. Scan the QR code on the TV again."), Response.Status.UNAUTHORIZED)
         }
         val body: JSONObject = if (s.method == Method.POST) {
@@ -149,6 +149,7 @@ class RemoteServer(private val app: CouchApp, port: Int) : NanoHTTPD(port) {
                     .put("series", sync.series)
                     .put("live", sync.live)
                     .put("error", sync.error ?: JSONObject.NULL)
+                    .put("warning", sync.warning ?: JSONObject.NULL)
                     .put("lastSync", app.prefs.lastSync),
             )
             .put("counts", counts)
@@ -182,6 +183,10 @@ class RemoteServer(private val app: CouchApp, port: Int) : NanoHTTPD(port) {
                         .put("playing", np.playing)
                         .put("speed", np.speed.toDouble())
                         .put("hasNext", np.hasNext)
+                        .put(
+                            "subtitles",
+                            arr(np.subtitles.map { JSONObject().put("index", it.index).put("label", it.label).put("selected", it.selected) }),
+                        )
                 },
             )
     }

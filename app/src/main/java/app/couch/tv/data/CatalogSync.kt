@@ -3,17 +3,24 @@ package app.couch.tv.data
 import android.util.JsonReader
 import android.util.JsonToken
 import app.couch.tv.CouchApp
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.BufferedInputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.InputStreamReader
+import java.util.concurrent.TimeUnit
 
 /**
  * Downloads the provider's whole catalog into the local database. The JSON for a big
- * provider can be 30+ MB, so it's parsed as a stream and written in batches.
+ * provider can be 30+ MB, so it's saved to a file, then parsed as a stream and written in batches.
  */
 class CatalogSync(private val app: CouchApp) {
 
@@ -24,6 +31,7 @@ class CatalogSync(private val app: CouchApp) {
         val series: Int = 0,
         val live: Int = 0,
         val error: String? = null,
+        val warning: String? = null,
         val finishedAt: Long = 0L,
     )
 
@@ -44,7 +52,12 @@ class CatalogSync(private val app: CouchApp) {
 
     private suspend fun run() {
         val creds = app.prefs.config.value.creds() ?: return
-        val x = Xtream(app.http, creds)
+        // Separate client with patient timeouts: the catalog can be tens of megabytes.
+        val client = app.http.newBuilder()
+            .readTimeout(3, TimeUnit.MINUTES)
+            .retryOnConnectionFailure(true)
+            .build()
+        val x = Xtream(client, creds)
         _state.value = State(running = true, stage = "Signing in")
         app.prefs.account = x.login()
         val syncId = System.currentTimeMillis()
@@ -53,6 +66,7 @@ class CatalogSync(private val app: CouchApp) {
             Triple("series", "get_series_categories", "get_series"),
             Triple("live", "get_live_categories", "get_live_streams"),
         )
+        val incomplete = mutableListOf<String>()
         for ((kind, catAction, listAction) in plan) {
             _state.update { it.copy(stage = "Loading ${label(kind)}") }
             val cfg = app.prefs.config.value
@@ -61,46 +75,127 @@ class CatalogSync(private val app: CouchApp) {
             }
             app.db.categories().clear(kind)
             app.db.categories().upsert(cats)
-            val catMap = cats.associateBy { it.id }
-
-            var count = 0
-            val batch = ArrayList<Item>(500)
-            x.open(listAction).use { resp ->
-                val body = resp.body ?: return@use
-                val reader = JsonReader(body.charStream())
-                reader.isLenient = true
-                if (reader.peek() != JsonToken.BEGIN_ARRAY) {
-                    reader.skipValue()
-                    return@use
-                }
-                reader.beginArray()
-                while (reader.hasNext()) {
-                    if (reader.peek() != JsonToken.BEGIN_OBJECT) {
-                        reader.skipValue()
-                        continue
-                    }
-                    val item = toItem(kind, reader.readFlatObject(), catMap, syncId, cfg) ?: continue
-                    batch += item
-                    if (batch.size >= 500) {
-                        app.db.items().upsert(ArrayList(batch))
-                        count += batch.size
-                        batch.clear()
-                        report(kind, count)
-                    }
-                }
-                reader.endArray()
+            if (loadKind(x, kind, listAction, cats, syncId, cfg)) {
+                // Only forget titles the provider removed when we know we got the full list.
+                app.db.items().deleteStale(kind, syncId)
+            } else {
+                incomplete += label(kind)
             }
-            if (batch.isNotEmpty()) {
-                app.db.items().upsert(ArrayList(batch))
-                count += batch.size
-                batch.clear()
-            }
-            report(kind, count)
-            app.db.items().deleteStale(kind, syncId)
         }
         app.db.cache().prune(System.currentTimeMillis() - 30L * 24 * 3600_000)
         app.prefs.lastSync = System.currentTimeMillis()
-        _state.update { it.copy(running = false, stage = "Done", error = null, finishedAt = System.currentTimeMillis()) }
+        val warning = if (incomplete.isEmpty()) {
+            null
+        } else {
+            "Some ${incomplete.joinToString(" and ")} didn't download because the provider kept dropping the connection. " +
+                "Everything else works. Refresh the library later to fill the gaps."
+        }
+        _state.update {
+            it.copy(running = false, stage = "Done", error = null, warning = warning, finishedAt = System.currentTimeMillis())
+        }
+    }
+
+    /**
+     * Gets one kind of content (movies, series or channels). Returns true if the full list arrived.
+     *
+     * Step 1 downloads the whole list to a file at full network speed and only then reads it, so a
+     * slow TV database never stalls the transfer (stalled transfers are what make providers hang up).
+     * Step 2, if the provider still cuts the big download, fetches one category at a time instead.
+     */
+    private suspend fun loadKind(
+        x: Xtream,
+        kind: String,
+        action: String,
+        cats: List<Category>,
+        syncId: Long,
+        cfg: Config,
+    ): Boolean {
+        val catMap = cats.associateBy { it.id }
+        val file = File(app.cacheDir, "sync-$kind.json")
+        try {
+            for (attempt in 1..3) {
+                try {
+                    val again = if (attempt > 1) " (attempt $attempt of 3)" else ""
+                    _state.update { it.copy(stage = "Downloading ${label(kind)}$again") }
+                    x.downloadTo(file, action)
+                    _state.update { it.copy(stage = "Saving ${label(kind)}") }
+                    importFile(file, kind, catMap, syncId, cfg, 0)
+                    return true
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    delay(2_000L * attempt)
+                }
+            }
+
+            val wanted = cats.filter { cfg.showAdult || !it.adult }
+            if (wanted.isEmpty()) return false
+            var total = 0
+            var failed = 0
+            wanted.forEachIndexed { i, cat ->
+                _state.update { it.copy(stage = "Loading ${label(kind)} one category at a time (${i + 1} of ${wanted.size})") }
+                var ok = false
+                for (attempt in 1..3) {
+                    try {
+                        x.downloadTo(file, action, mapOf("category_id" to cat.id))
+                        total = importFile(file, kind, catMap, syncId, cfg, total)
+                        ok = true
+                        break
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        delay(1_500L * attempt)
+                    }
+                }
+                if (!ok) failed++
+            }
+            return failed == 0
+        } finally {
+            file.delete()
+        }
+    }
+
+    /** Reads a downloaded list and saves it in batches. Returns the running total for progress. */
+    private suspend fun importFile(
+        file: File,
+        kind: String,
+        catMap: Map<String, Category>,
+        syncId: Long,
+        cfg: Config,
+        startCount: Int,
+    ): Int {
+        var count = startCount
+        if (file.length() == 0L) return count
+        val batch = ArrayList<Item>(1000)
+        JsonReader(InputStreamReader(BufferedInputStream(FileInputStream(file), 64 * 1024), Charsets.UTF_8)).use { reader ->
+            reader.isLenient = true
+            if (reader.peek() != JsonToken.BEGIN_ARRAY) {
+                reader.skipValue()
+                return count
+            }
+            reader.beginArray()
+            while (reader.hasNext()) {
+                if (reader.peek() != JsonToken.BEGIN_OBJECT) {
+                    reader.skipValue()
+                    continue
+                }
+                val item = toItem(kind, reader.readFlatObject(), catMap, syncId, cfg) ?: continue
+                batch += item
+                if (batch.size >= 1000) {
+                    app.db.items().upsert(ArrayList(batch))
+                    count += batch.size
+                    batch.clear()
+                    report(kind, count)
+                }
+            }
+            reader.endArray()
+        }
+        if (batch.isNotEmpty()) {
+            app.db.items().upsert(ArrayList(batch))
+            count += batch.size
+        }
+        report(kind, count)
+        return count
     }
 
     private fun report(kind: String, count: Int) {

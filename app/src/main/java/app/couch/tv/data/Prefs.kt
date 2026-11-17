@@ -27,6 +27,8 @@ data class Config(
     val hiddenCats: Set<String> = emptySet(),
     /** Set once the user has been through the language picker after the first sync. */
     val filterChosen: Boolean = false,
+    /** When on, only phones that scanned the QR code (which carries a secret) can use the remote. */
+    val requirePairing: Boolean = false,
 ) {
     val isConfigured: Boolean get() = server.isNotBlank() && username.isNotBlank()
 
@@ -103,6 +105,7 @@ class Prefs(ctx: Context) {
         hiddenLangs = (sp.getStringSet("hiddenLangs", null) ?: emptySet()).toSet(),
         hiddenCats = (sp.getStringSet("hiddenCats", null) ?: emptySet()).toSet(),
         filterChosen = sp.getBoolean("filterChosen", false),
+        requirePairing = sp.getBoolean("requirePairing", false),
     )
 
     private fun save(c: Config) {
@@ -124,6 +127,7 @@ class Prefs(ctx: Context) {
             .putStringSet("hiddenLangs", HashSet(c.hiddenLangs))
             .putStringSet("hiddenCats", HashSet(c.hiddenCats))
             .putBoolean("filterChosen", c.filterChosen)
+            .putBoolean("requirePairing", c.requirePairing)
             .apply()
     }
 

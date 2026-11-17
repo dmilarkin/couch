@@ -13,7 +13,7 @@ An IPTV app for Google TV (built for a TCL set, works on any Android TV / Google
 - Series: season tabs and an episode strip.
 - Player: playback speed (0.5x to 2x), quality (stream variants or the provider's versions), audio tracks, built-in subtitles, online subtitles from OpenSubtitles, zoom modes. Live TV has channel up/down and a now/next guide.
 - Optional ratings and artwork from TMDB, plus IMDb and Rotten Tomatoes scores from OMDb.
-- **iPhone remote:** the TV shows a QR code. Scan it and a page served by the TV opens in Safari. From there you can sign in, set the library filter, browse, search, tap "Play on TV", and control playback (pause, seek, speed, subtitles, next episode). Your phone and TV just need to be on the same Wi-Fi. There's no App Store install and no Bluetooth.
+- **Phone remote:** the TV shows a QR code and an address like `http://192.168.1.40:8642`. Scan the code, or type the address into any phone's browser on the same Wi-Fi, and a page served by the TV opens. From there you can sign in, set the library filter, browse, search, tap "Play on TV", and control playback (pause, seek, speed, subtitles, next episode). Your phone and TV just need to be on the same Wi-Fi. There's no App Store install and no Bluetooth.
 
 ---
 
@@ -77,7 +77,7 @@ This product uses the TMDB API but is not endorsed or certified by TMDB.
 - Player, with the controls hidden: left/right skips 10 seconds (hold to go faster), OK pauses, up/down shows the controls. On live TV, up/down changes the channel.
 - Player, with the controls showing: the bar has Audio, Subtitles, Speed, Quality, Version, Zoom and Next episode. Back hides the controls, and Back again leaves the player.
 
-**On the iPhone:** Home, Browse, Search, Remote and Settings tabs. "Play on TV" works whenever Couch is open on the TV. If the TV app is in the background, the title starts the moment you open Couch.
+**On the phone:** Home, Browse, Search, Remote and Settings tabs. The Remote tab lists the subtitle tracks, so you can switch them off, back on, or to another language, or search online. "Play on TV" works whenever Couch is open on the TV. If the TV app is in the background, the title starts the moment you open Couch.
 
 ## Troubleshooting
 
@@ -92,7 +92,7 @@ This product uses the TMDB API but is not endorsed or certified by TMDB.
 
 - Kotlin, Jetpack Compose for TV (`androidx.tv:tv-material`), Media3 ExoPlayer with HLS and OkHttp, Room for the catalog, Coil for images.
 - `data/` has the Xtream client (streaming JSON parser for huge catalogs), the title parser (language, year, quality, genre), the Room database, catalog sync, TMDB/OMDb and OpenSubtitles.
-- `remote/` has the small web server on the TV (NanoHTTPD, port 8642) that serves `assets/web/index.html` to your phone. Only phones that scanned the QR code (it carries a pairing token) can control the TV.
+- `remote/` has the small web server on the TV (NanoHTTPD, port 8642) that serves `assets/web/index.html` to your phone. By default any phone on your Wi-Fi can use it. Turn on **Phones need the QR code** in the TV's Settings to allow only phones that scanned the code (it carries a pairing token).
 - `ui/` has the screens.
 
 The signing key is committed so updates install over each other. That's fine for a personal sideloaded app. Don't reuse it for anything published.

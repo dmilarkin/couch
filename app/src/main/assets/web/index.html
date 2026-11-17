@@ -127,7 +127,8 @@
 "use strict";
 // ---------------------------------------------------------------- basics
 const qs = new URLSearchParams(location.search);
-if (qs.get("t")) { try { localStorage.setItem("couchToken", qs.get("t")); } catch (e) {} history.replaceState(null, "", "/"); }
+// Keep the token in the address too, so "Add to Home Screen" stays paired even if Safari clears its storage.
+if (qs.get("t")) { try { localStorage.setItem("couchToken", qs.get("t")); } catch (e) {} }
 let TOKEN = qs.get("t") || "";
 try { TOKEN = TOKEN || localStorage.getItem("couchToken") || ""; } catch (e) {}
 
@@ -158,6 +159,7 @@ async function api(path, body) {
   let r;
   try { r = await fetch(path, opt); } catch (e) { throw new Error("Can't reach the TV. Is Couch open and on the same Wi-Fi?"); }
   const j = await r.json().catch(() => ({}));
+  if (r.status === 401) { const err = new Error(j.error || "Not paired"); err.unpaired = true; throw err; }
   if (!r.ok || j.error) throw new Error(j.error || ("Error " + r.status));
   return j;
 }
@@ -220,7 +222,7 @@ async function play(body) {
 // ---------------------------------------------------------------- setup
 function renderUnpaired() {
   renderTabs(false);
-  view(`<h1>Couch</h1><p>Open Couch on your TV, go to Settings, and scan the QR code with your iPhone camera. That pairs this phone with the TV.</p>`);
+  view(`<h1>Couch</h1><p>This TV only lets paired phones in. Open Couch on the TV, go to Settings and scan the QR code with this phone's camera. Or switch off "Phones need the QR code" there.</p>`);
 }
 function renderSetup(changing) {
   renderTabs(!!changing); stopPoll();
@@ -437,6 +439,7 @@ function renderRemote() {
       <div class="wrap" id="scrubWrap"><input type="range" id="scrub" min="0" max="1000" value="0"><div class="row small muted" style="justify-content:space-between"><span id="tPos"></span><span id="tLeft"></span></div></div>
       <div class="remote" id="pad"></div>
       <div class="wrap" id="speedWrap"><label>Speed</label><div class="row" id="speeds"></div></div>
+      <div class="wrap" style="margin-top:16px"><label>Subtitles</label><div class="row" id="subs"></div></div>
       <div class="wrap" style="margin-top:16px"><div class="row" id="extra"></div></div>`;
       const sc = $("#scrub");
       sc.oninput = () => { seeking = true; const s = state.nowPlaying; if (s) $("#tPos").textContent = fmt(sc.value / 1000 * s.durationMs); };
@@ -456,15 +459,22 @@ function renderRemote() {
     $("#pad").style.gridTemplateColumns = `repeat(${pad.length}, 1fr)`;
     $("#pad").innerHTML = pad.map(([c, l, cls]) => `<button data-c="${c}" class="${cls || ""}">${l}</button>`).join("");
     $("#speeds").innerHTML = [0.75, 1, 1.25, 1.5, 1.75, 2].map(s => `<button class="btn small ${Math.abs(np.speed - s) < 0.01 ? "primary" : ""}" data-c="speed:${s}">${s}x</button>`).join("");
+    const subs = np.subtitles || [];
+    const anyOn = subs.some(s => s.selected);
+    $("#subs").innerHTML = `<button class="btn small ${anyOn ? "" : "primary"}" data-c="subsOff">Off</button>` +
+      (subs.length
+        ? subs.map(s => `<button class="btn small ${s.selected ? "primary" : ""}" data-c="subsOn:${s.index}">${esc(s.label)}</button>`).join("")
+        : `<button class="btn small" data-c="subsOn:-1">On</button>`) +
+      `<button class="btn small" data-c="subsSearch">Find online…</button>`;
     $("#extra").innerHTML = (np.hasNext ? `<button class="btn small" data-c="next">Next episode</button>` : "") +
-      `<button class="btn small" data-c="subsSearch">Find subtitles</button><button class="btn small" data-c="subsOff">Subtitles off</button><button class="btn small" data-c="stop" style="color:var(--red)">Stop</button>`;
+      `<button class="btn small" data-c="stop" style="color:var(--red)">Stop</button>`;
   };
   app.onclick = null;
   $("#np").addEventListener("click", async e => {
     const b = e.target.closest("[data-c]"); if (!b) return;
     const [c, v] = b.dataset.c.split(":");
     await ctl(c, v !== undefined ? Number(v) : 0);
-    if (c === "subsSearch") toast("Pick subtitles on the TV");
+    if (c === "subsSearch") toast("Pick from the list on the TV");
   });
   const tick = async () => { try { state = await api("/api/state"); draw(); } catch (e) { } };
   tick(); pollTimer = setInterval(tick, 1200);
@@ -500,7 +510,7 @@ async function renderSettings() {
     <h3>Library</h3>
     <div class="list">
       <button class="item" id="openFilter"><div class="grow"><div>Library filter</div><div class="sub">Choose which languages and categories show up</div></div><span class="muted">›</span></button>
-      <button class="item" id="refresh"><div class="grow"><div>Refresh library</div><div class="sub">${state.sync.running ? esc(state.sync.stage) + "…" : `${(counts.movie || 0).toLocaleString()} movies · ${(counts.series || 0).toLocaleString()} series · ${(counts.live || 0).toLocaleString()} channels`}</div></div></button>
+      <button class="item" id="refresh"><div class="grow"><div>Refresh library</div><div class="sub">${state.sync.running ? esc(state.sync.stage) + "…" : state.sync.warning ? `<span style="color:var(--accent)">${esc(state.sync.warning)}</span>` : `${(counts.movie || 0).toLocaleString()} movies · ${(counts.series || 0).toLocaleString()} series · ${(counts.live || 0).toLocaleString()} channels`}</div></div></button>
     </div>
 
     <h3>Preferences</h3>
@@ -630,9 +640,9 @@ async function saveFilter() {
 
 // ---------------------------------------------------------------- boot
 (async function boot() {
-  if (!TOKEN) return renderUnpaired();
   try { state = await api("/api/state"); }
-  catch (e) { renderTabs(false); view(`<h1>Couch</h1><p>${esc(e.message)}</p><div class="wrap"><button class="btn block" onclick="location.reload()">Try again</button></div>`); return; }
+  catch (e) {
+    if (e.unpaired) return renderUnpaired(); renderTabs(false); view(`<h1>Couch</h1><p>${esc(e.message)}</p><div class="wrap"><button class="btn block" onclick="location.reload()">Try again</button></div>`); return; }
   if (!state.configured) return renderSetup(false);
   render();
 })();
